@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pemindai QR Pondok</title>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f7f5;color:#18352b;font-family:Arial,sans-serif}
+main{max-width:620px;margin:0 auto;padding:22px}
+.card{background:#fff;border:1px solid #e1eae4;border-radius:16px;padding:20px;box-shadow:0 8px 30px #153b2510}
+h1{font-size:21px;margin:0 0 8px;color:#14532d}p{font-size:14px;line-height:1.55;color:#617168}
+button{border:0;border-radius:9px;padding:12px 16px;font-weight:bold;background:#17643b;color:white;font-size:14px}
+button.secondary{background:#e8f1eb;color:#14532d}button:disabled{opacity:.55}
+video{width:100%;background:#111;border-radius:12px;display:block;margin-top:14px;max-height:65vh}
+#status{padding:12px;border-radius:9px;background:#eef6f0;margin-top:14px;font-size:14px;line-height:1.5;white-space:pre-wrap}
+.err{background:#fff0f0!important;color:#9b1c1c}.ok{background:#e8f7ed!important;color:#166534}
+.small{font-size:12px;color:#718078}
+</style>
+</head>
+<body>
+<main><section class="card">
+<h1>Pemindai QR Pondok</h1>
+<p>Izinkan akses kamera, lalu arahkan QR kartu santri ke kamera. Hasil scan akan dikirim kembali ke aplikasi Administrasi Pondok.</p>
+<button id="start">Mulai Kamera</button>
+<button id="stop" class="secondary" disabled>Matikan Kamera</button>
+<video id="video" autoplay muted playsinline></video>
+<canvas id="canvas" hidden></canvas>
+<div id="status">Siap. Tekan “Mulai Kamera”.</div>
+<p class="small">Pastikan halaman ini dibuka dari tombol Buka Kamera QR di aplikasi Administrasi Pondok, bukan dibuka sendiri.</p>
+</section></main>
+<script>
+(function(){
+  const video=document.getElementById('video'),canvas=document.getElementById('canvas');
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});
+  const status=document.getElementById('status'),start=document.getElementById('start'),stop=document.getElementById('stop');
+  let stream=null,raf=0,busy=false,last='',lastAt=0;
+  function msg(t,kind){status.textContent=t;status.className=kind||'';}
+  async function mulai(){
+    if(!window.opener){msg('Halaman ini harus dibuka melalui tombol Buka Kamera QR dari aplikasi Administrasi Pondok.','err');return;}
+    if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      msg('Browser tidak menyediakan akses kamera. Gunakan Chrome terbaru dan buka halaman HTTPS.','err');return;
+    }
+    if(typeof jsQR!=='function'){msg('Library pembaca QR gagal dimuat. Periksa koneksi internet lalu muat ulang.','err');return;}
+    start.disabled=true;
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+      video.srcObject=stream;await video.play();stop.disabled=false;
+      msg('Kamera aktif. Arahkan QR kartu santri ke kamera.');
+      raf=requestAnimationFrame(pindai);
+    }catch(e){
+      start.disabled=false;
+      let m='Kamera gagal dibuka ('+(e&&e.name||'Error')+').';
+      if(e.name==='NotAllowedError'||e.name==='PermissionDeniedError')m+=' Izinkan kamera pada pengaturan situs/browser, lalu muat ulang.';
+      else if(e.name==='NotFoundError')m+=' Kamera tidak ditemukan.';
+      else if(e.name==='NotReadableError')m+=' Kamera sedang digunakan aplikasi lain.';
+      msg(m,'err');
+    }
+  }
+  function pindai(){
+    if(!stream)return;
+    if(video.readyState>=2&&!busy&&video.videoWidth){
+      const scale=Math.min(1,900/video.videoWidth);
+      canvas.width=Math.max(1,Math.round(video.videoWidth*scale));
+      canvas.height=Math.max(1,Math.round(video.videoHeight*scale));
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+      const image=ctx.getImageData(0,0,canvas.width,canvas.height);
+      const result=jsQR(image.data,image.width,image.height,{inversionAttempts:'attemptBoth'});
+      const now=Date.now();
+      if(result&&result.data&&(result.data!==last||now-lastAt>2500)){
+        last=result.data;lastAt=now;busy=true;
+        msg('QR terbaca. Mengirim hasil ke aplikasi...');
+        try{
+          window.opener.postMessage({type:'PONDOK_QR_SCAN',payload:result.data},'*');
+          msg('QR berhasil dikirim. Kembali ke tab Administrasi Pondok.','ok');
+          hentikan();setTimeout(function(){window.close();},900);
+          return;
+        }catch(e){busy=false;msg('Gagal mengirim hasil scan. Tutup tab ini dan buka ulang dari aplikasi.','err');}
+      }
+    }
+    raf=requestAnimationFrame(pindai);
+  }
+  function hentikan(){
+    if(raf)cancelAnimationFrame(raf);raf=0;
+    if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;
+    video.srcObject=null;start.disabled=false;stop.disabled=true;
+  }
+  start.addEventListener('click',mulai);stop.addEventListener('click',hentikan);
+  window.addEventListener('beforeunload',hentikan);
+})();
+</script>
+</body></html>
